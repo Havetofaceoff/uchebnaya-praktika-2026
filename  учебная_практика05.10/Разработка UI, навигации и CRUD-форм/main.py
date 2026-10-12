@@ -35,14 +35,17 @@ class MainWindow:
     def set_app_icon(self):
         icon_path = RESOURCES_DIR / "icon.png"
 
-        if icon_path.is_file():
+        if not icon_path.is_file():
+            print("Иконка не найдена:", icon_path)
+            return
+
+        try:
             self.icon_image = tk.PhotoImage(file=str(icon_path))
             self.root.iconphoto(True, self.icon_image)
-        else:
-            print("Иконка не найдена:", icon_path)
+        except (tk.TclError, OSError) as error:
+            print("Не удалось загрузить иконку:", error)
 
     def create_widgets(self):
-        # Шапка приложения
         header = tk.Frame(
             self.root,
             bg="#ffffff",
@@ -54,15 +57,19 @@ class MainWindow:
         logo_path = RESOURCES_DIR / "logo.png"
 
         if logo_path.is_file():
-            self.logo_image = tk.PhotoImage(file=str(logo_path))
+            try:
+                self.logo_image = tk.PhotoImage(
+                    file=str(logo_path)
+                )
 
-            tk.Label(
-                header,
-                image=self.logo_image,
-                bg="#ffffff"
-            ).pack(side="left", padx=(0, 20))
-        else:
-            print("Логотип не найден:", logo_path)
+                tk.Label(
+                    header,
+                    image=self.logo_image,
+                    bg="#ffffff"
+                ).pack(side="left", padx=(0, 20))
+
+            except (tk.TclError, OSError) as error:
+                print("Не удалось загрузить логотип:", error)
 
         tk.Label(
             header,
@@ -72,9 +79,12 @@ class MainWindow:
             bg="#ffffff"
         ).pack(side="left")
 
-        # Оформление таблицы
         style = ttk.Style()
-        style.theme_use("clam")
+
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
 
         style.configure(
             "Treeview",
@@ -146,7 +156,10 @@ class MainWindow:
             orient="vertical",
             command=self.table.yview
         )
-        self.table.configure(yscrollcommand=scrollbar.set)
+
+        self.table.configure(
+            yscrollcommand=scrollbar.set
+        )
 
         scrollbar.pack(side="right", fill="y")
         self.table.pack(
@@ -155,7 +168,6 @@ class MainWindow:
             expand=True
         )
 
-        # Кнопки
         buttons = tk.Frame(
             self.root,
             bg="#f5f5f5"
@@ -192,7 +204,33 @@ class MainWindow:
 
         self.table.bind(
             "<Double-1>",
-            lambda event: self.edit_partner()
+            self.on_double_click
+        )
+
+    def on_double_click(self, event):
+        # Не открываем карточку при двойном щелчке
+        # по заголовку или пустой области таблицы.
+        if self.table.identify_region(
+            event.x, event.y
+        ) == "cell":
+            row = self.table.identify_row(event.y)
+
+            if row:
+                self.table.selection_set(row)
+                self.edit_partner()
+
+    def show_database_error(self, error):
+        messagebox.showerror(
+            "Ошибка базы данных",
+            "Не удалось загрузить данные CRM.\n\n"
+            "Что делать:\n"
+            "1. Проверьте наличие файла clean_data.sqlite3.\n"
+            "2. Убедитесь, что файл доступен.\n"
+            "3. Закройте программы, которые могут "
+            "блокировать базу данных.\n"
+            "4. Повторно нажмите «Обновить список».\n\n"
+            f"Техническая информация: {error}",
+            parent=self.root
         )
 
     def add_partner(self):
@@ -206,45 +244,82 @@ class MainWindow:
 
         if not selected:
             messagebox.showwarning(
-                "Внимание",
-                "Сначала выберите партнера в таблице"
+                "Партнёр не выбран",
+                "Сначала выберите партнёра.\n\n"
+                "1. Нажмите на нужную строку в таблице.\n"
+                "2. Повторно нажмите кнопку "
+                "«Редактировать» или «История продаж».",
+                parent=self.root
             )
             return None
 
-        return self.table.item(selected[0], "values")
+        values = self.table.item(
+            selected[0],
+            "values"
+        )
+
+        if len(values) < 2:
+            messagebox.showerror(
+                "Ошибка выбора",
+                "Не удалось определить партнёра.\n\n"
+                "1. Нажмите «Обновить список».\n"
+                "2. Повторно выберите партнёра.",
+                parent=self.root
+            )
+            return None
+
+        try:
+            partner_id = int(values[0])
+
+            if partner_id <= 0:
+                raise ValueError
+
+        except (ValueError, TypeError):
+            messagebox.showerror(
+                "Некорректный ID",
+                "Идентификатор партнёра некорректен.\n\n"
+                "1. Обновите список партнёров.\n"
+                "2. Выберите нужную строку повторно.",
+                parent=self.root
+            )
+            return None
+
+        return partner_id, values[1]
 
     def edit_partner(self):
-        values = self.get_selected_partner()
+        partner = self.get_selected_partner()
 
-        if values is None:
+        if partner is None:
             return
+
+        partner_id, _ = partner
 
         PartnerEditWindow(
             self.root,
             on_save=self.load_partners,
-            partner_id=int(values[0])
+            partner_id=partner_id
         )
 
     def show_history(self):
-        values = self.get_selected_partner()
+        partner = self.get_selected_partner()
 
-        if values is None:
+        if partner is None:
             return
+
+        partner_id, partner_name = partner
 
         PartnerHistoryWindow(
             self.root,
-            partner_id=int(values[0]),
-            partner_name=values[1]
+            partner_id=partner_id,
+            partner_name=partner_name
         )
 
     def load_partners(self):
-        for item in self.table.get_children():
-            self.table.delete(item)
-
+        # Проверяем базу до очистки таблицы:
+        # при ошибке уже загруженные данные останутся.
         if not DATABASE_PATH.is_file():
-            messagebox.showerror(
-                "Ошибка",
-                "База данных не найдена"
+            self.show_database_error(
+                "Файл clean_data.sqlite3 не найден"
             )
             return
 
@@ -263,26 +338,27 @@ class MainWindow:
                     """
                 ).fetchall()
 
-            for partner in partners:
-                self.table.insert(
-                    "",
-                    "end",
-                    values=(
-                        partner[0],
-                        partner[1],
-                        partner[2] or "Не указан",
-                        partner[3],
-                        partner[4]
-                    )
+        except (sqlite3.Error, OSError) as error:
+            self.show_database_error(error)
+            return
+
+        for item in self.table.get_children():
+            self.table.delete(item)
+
+        for partner in partners:
+            self.table.insert(
+                "",
+                "end",
+                values=(
+                    partner[0],
+                    partner[1],
+                    partner[2] or "Не указан",
+                    partner[3],
+                    partner[4] or ""
                 )
-
-            print("Загружено партнеров:", len(partners))
-
-        except sqlite3.Error as error:
-            messagebox.showerror(
-                "Ошибка базы данных",
-                str(error)
             )
+
+        print("Загружено партнеров:", len(partners))
 
 
 if __name__ == "__main__":

@@ -62,6 +62,7 @@ class PartnerEditWindow:
     def __init__(self, parent, on_save=None, partner_id=None):
         self.on_save = on_save
         self.partner_id = partner_id
+        self.original_data = None
 
         self.window = tk.Toplevel(parent)
         self.window.title(
@@ -207,7 +208,7 @@ class PartnerEditWindow:
         tk.Button(
             buttons,
             text="Назад",
-            command=self.window.destroy,
+            command=self.close_window,
             width=16,
             font=("Arial", 12)
         ).pack(
@@ -215,11 +216,71 @@ class PartnerEditWindow:
             padx=10
         )
 
+        # Закрытие крестиком тоже проверяет изменения.
+        self.window.protocol(
+            "WM_DELETE_WINDOW",
+            self.close_window
+        )
+
         if self.partner_id is not None:
-            self.load_partner()
+            if not self.load_partner():
+                return
+
+        # Запоминаем состояние формы до редактирования.
+        self.original_data = self.get_form_data()
+
+    def get_form_data(self):
+        data = {
+            key: entry.get_value()
+            for key, entry in self.entries.items()
+        }
+
+        data["partner_type"] = self.partner_type.get()
+        return data
+
+    def close_window(self):
+        if (
+            self.original_data is not None
+            and self.get_form_data() != self.original_data
+        ):
+            confirm = messagebox.askyesno(
+                "Несохранённые изменения",
+                "Вы изменили данные партнёра, "
+                "но не сохранили их.\n\n"
+                "Если выйти сейчас, изменения "
+                "будут потеряны.\n\n"
+                "Выйти без сохранения?",
+                parent=self.window
+            )
+
+            if not confirm:
+                return
+
+        self.window.destroy()
+
+    def show_database_error(self, error):
+        messagebox.showerror(
+            "Ошибка базы данных",
+            "Не удалось выполнить операцию "
+            "с базой данных.\n\n"
+            "Что делать:\n"
+            "1. Проверьте наличие файла clean_data.sqlite3.\n"
+            "2. Убедитесь, что файл доступен для чтения "
+            "и записи.\n"
+            "3. Закройте программы, которые могут "
+            "блокировать базу.\n"
+            "4. Повторите операцию.\n\n"
+            f"Техническая информация: {error}",
+            parent=self.window
+        )
 
     def load_partner(self):
         try:
+            if not DATABASE_PATH.is_file():
+                raise sqlite3.OperationalError(
+                    "Файл базы данных не найден"
+                )
+
             with sqlite3.connect(DATABASE_PATH) as connection:
                 partner = connection.execute(
                     """
@@ -240,12 +301,15 @@ class PartnerEditWindow:
 
             if partner is None:
                 messagebox.showerror(
-                    "Ошибка",
-                    "Партнер не найден",
+                    "Партнёр не найден",
+                    "Не удалось открыть карточку партнёра.\n\n"
+                    "1. Вернитесь к списку партнёров.\n"
+                    "2. Обновите список.\n"
+                    "3. Повторно выберите партнёра.",
                     parent=self.window
                 )
                 self.window.destroy()
-                return
+                return False
 
             keys = [
                 "partner_name",
@@ -270,12 +334,12 @@ class PartnerEditWindow:
             else:
                 self.partner_type.set("ООО")
 
+            return True
+
         except sqlite3.Error as error:
-            messagebox.showerror(
-                "Ошибка базы данных",
-                str(error),
-                parent=self.window
-            )
+            self.show_database_error(error)
+            self.window.destroy()
+            return False
 
     def save_partner(self):
         name = self.entries["partner_name"].get_value()
@@ -283,8 +347,11 @@ class PartnerEditWindow:
 
         if not name or not inn:
             messagebox.showwarning(
-                "Ошибка",
-                "Заполните наименование и ИНН",
+                "Ошибка заполнения",
+                "Не удалось сохранить партнёра.\n\n"
+                "1. Заполните поле «Наименование».\n"
+                "2. Заполните поле «ИНН».\n"
+                "3. Повторно нажмите «Сохранить».",
                 parent=self.window
             )
             return
@@ -299,8 +366,13 @@ class PartnerEditWindow:
 
         except ValueError:
             messagebox.showwarning(
-                "Ошибка",
-                "Рейтинг должен быть целым неотрицательным числом",
+                "Некорректный рейтинг",
+                "Рейтинг должен быть целым "
+                "неотрицательным числом.\n\n"
+                "1. Введите число, например 0, 5 или 10.\n"
+                "2. Не используйте отрицательные "
+                "или дробные значения.\n"
+                "3. Повторите сохранение.",
                 parent=self.window
             )
             return
@@ -317,6 +389,11 @@ class PartnerEditWindow:
         )
 
         try:
+            if not DATABASE_PATH.is_file():
+                raise sqlite3.OperationalError(
+                    "Файл базы данных не найден"
+                )
+
             with sqlite3.connect(DATABASE_PATH) as connection:
                 if self.partner_id is None:
                     connection.execute(
@@ -356,17 +433,24 @@ class PartnerEditWindow:
 
                     if cursor.rowcount == 0:
                         messagebox.showerror(
-                            "Ошибка",
-                            "Партнер не найден",
+                            "Партнёр не найден",
+                            "Не удалось сохранить изменения.\n\n"
+                            "1. Вернитесь к списку партнёров.\n"
+                            "2. Обновите список.\n"
+                            "3. Проверьте, существует ли "
+                            "этот партнёр.",
                             parent=self.window
                         )
                         return
 
                 connection.commit()
 
+            # Сохранение прошло успешно.
+            self.original_data = self.get_form_data()
+
             messagebox.showinfo(
                 "Успех",
-                "Данные партнера сохранены!",
+                "Данные партнёра успешно сохранены!",
                 parent=self.window
             )
 
@@ -376,8 +460,4 @@ class PartnerEditWindow:
             self.window.destroy()
 
         except sqlite3.Error as error:
-            messagebox.showerror(
-                "Ошибка базы данных",
-                str(error),
-                parent=self.window
-            )
+            self.show_database_error(error)

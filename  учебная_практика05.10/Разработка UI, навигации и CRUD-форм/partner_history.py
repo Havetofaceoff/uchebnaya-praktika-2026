@@ -14,6 +14,8 @@ DATABASE_PATH = (
 
 class PartnerHistoryWindow:
     def __init__(self, parent, partner_id, partner_name):
+        self.partner_id = partner_id
+
         self.window = tk.Toplevel(parent)
         self.window.title("CRM: История продаж")
         self.window.geometry("950x550")
@@ -96,18 +98,69 @@ class PartnerHistoryWindow:
         )
         self.status_label.pack(pady=5)
 
-        tk.Button(
+        buttons = tk.Frame(
             self.window,
+            bg="#f5f5f5"
+        )
+        buttons.pack(pady=15)
+
+        tk.Button(
+            buttons,
+            text="Обновить",
+            command=self.load_history,
+            width=20
+        ).pack(side="left", padx=10)
+
+        tk.Button(
+            buttons,
             text="Назад",
             command=self.window.destroy,
             width=20
-        ).pack(pady=15)
+        ).pack(side="left", padx=10)
 
-        self.load_history(partner_id)
+        self.load_history()
 
-    def load_history(self, partner_id):
-        for item in self.table.get_children():
-            self.table.delete(item)
+    def show_database_error(self, error):
+        messagebox.showerror(
+            "Ошибка базы данных",
+            "Не удалось загрузить историю продаж.\n\n"
+            "Что делать:\n"
+            "1. Проверьте наличие файла clean_data.sqlite3.\n"
+            "2. Убедитесь, что файл доступен для чтения.\n"
+            "3. Закройте программы, которые могут "
+            "блокировать базу данных.\n"
+            "4. Нажмите «Обновить» для повторной попытки.\n\n"
+            f"Техническая информация: {error}",
+            parent=self.window
+        )
+
+    def load_history(self):
+        # Проверяем ID перед передачей в SQL-запрос.
+        if (
+            type(self.partner_id) is not int
+            or self.partner_id <= 0
+        ):
+            self.status_label.config(
+                text="Ошибка: некорректный ID партнёра"
+            )
+            messagebox.showerror(
+                "Некорректный ID",
+                "Не удалось определить партнёра.\n\n"
+                "1. Закройте историю продаж.\n"
+                "2. Обновите список партнёров.\n"
+                "3. Выберите партнёра повторно.",
+                parent=self.window
+            )
+            return
+
+        if not DATABASE_PATH.is_file():
+            self.status_label.config(
+                text="История продаж недоступна"
+            )
+            self.show_database_error(
+                "Файл clean_data.sqlite3 не найден"
+            )
+            return
 
         try:
             with sqlite3.connect(DATABASE_PATH) as connection:
@@ -127,37 +180,39 @@ class PartnerHistoryWindow:
                     WHERE s.partner_id = ?
                     ORDER BY s.sale_date DESC
                     """,
-                    (partner_id,)
+                    (self.partner_id,)
                 ).fetchall()
 
-            for sale in sales:
-                self.table.insert(
-                    "",
-                    "end",
-                    values=(
-                        sale[0],
-                        sale[1],
-                        sale[2],
-                        sale[3]
-                    )
-                )
+        except (sqlite3.Error, OSError) as error:
+            self.status_label.config(
+                text="Не удалось обновить историю продаж"
+            )
+            self.show_database_error(error)
+            return
 
-            if sales:
-                self.status_label.config(
-                    text=f"Всего продаж: {len(sales)}"
-                )
-            else:
-                self.status_label.config(
-                    text="У этого партнера пока нет продаж"
-                )
+        # Обновляем таблицу только после успешного запроса.
+        for item in self.table.get_children():
+            self.table.delete(item)
 
-            print("Загружено продаж:", len(sales))
-
-        except sqlite3.Error as error:
-            messagebox.showerror(
-                "Ошибка базы данных",
-                str(error),
-                parent=self.window
+        for sale in sales:
+            self.table.insert(
+                "",
+                "end",
+                values=(
+                    sale[0],
+                    sale[1],
+                    sale[2],
+                    sale[3]
+                )
             )
 
+        if sales:
+            self.status_label.config(
+                text=f"Всего продаж: {len(sales)}"
+            )
+        else:
+            self.status_label.config(
+                text="У этого партнёра пока нет продаж"
+            )
 
+        print("Загружено продаж:", len(sales))
